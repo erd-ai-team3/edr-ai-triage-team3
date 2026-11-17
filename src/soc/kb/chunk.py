@@ -14,11 +14,20 @@ from ..config import settings
 def make_chunks(elements: list, max_characters: int | None = None, new_after_n_chars: int | None = None) -> list:
     from unstructured.chunking.title import chunk_by_title
 
-    max_characters = max_characters or settings.chunk_max_characters
-    new_after_n_chars = new_after_n_chars or min(settings.chunk_new_after_n_chars, max_characters)
-    # TODO[DOC-3]: chunk_by_title()로 청킹합니다. 처음엔 max_characters=800으로 시작하고, 결과를 보며 조정합니다.
+    if max_characters is None:
+        max_characters = settings.chunk_max_characters
+    if new_after_n_chars is None:
+        new_after_n_chars = min(settings.chunk_new_after_n_chars, max_characters)
     # 정한 값과 이유를 DECISIONS.md "청킹 값"에 적습니다. (2일차에 🔍 기록 담당이 이 값을 바꿔 실험합니다)
-    raise NotImplementedError("TODO[DOC-3]")
+    if max_characters <= 0:
+        raise ValueError("max_characters는 0보다 커야 합니다.")
+    if not 0 < new_after_n_chars <= max_characters:
+        raise ValueError("new_after_n_chars는 1 이상 max_characters 이하여야 합니다.")
+    return chunk_by_title(
+        elements,
+        max_characters=max_characters,
+        new_after_n_chars=new_after_n_chars,
+    )
 
 
 def to_records(chunks: list, source: str) -> list[dict]:

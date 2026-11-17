@@ -11,7 +11,7 @@
 | `get_process_tree(host, pid)` | 🔍 | | `event_id`, … | | |
 | `get_process_activity(host, pid)` | 🔍 | | `event_id`, … | | |
 | `get_host_timeline(host, around_ts, minutes)` | 🔍 | | `event_id`, … | | |
-| `search_playbook(query, k)` | 📘 | query: str, k: int = 3 | `text`, `source`(파일 이름), `page`, `category`, `score` | 최대 `k`개 (기본 3개) | 검색 결과 없으면 [], 실행 오류 시 예외 발생 |
+| `search_playbook(query, k)` | 📘 | query: str, k: int = 3 | `text`, `source`(파일 이름), `page`, `category`, `score` | 최대 5개 (기본 3개) | 검색 결과 없으면 [], 실행 오류 시 예외 발생 |
 
 ## 꼭 합의할 것
 - 🔍 텔레메트리 도구의 모든 결과에는 **`event_id`**가 있다. → 가드레일이 판정 근거를 추적하는 데 씁니다 (2일차 `G-1`).
