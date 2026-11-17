@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     # KB ---------------------------------------------------------------------
     kb_pdf_dir: str = str(ROOT / "data" / "kb" / "pdf")
     parse_strategy: str = "fast"            # fast / hi_res / ocr_only
-    chunk_max_characters: int = 800
+    chunk_max_characters: int = 600
     chunk_new_after_n_chars: int = 600
 
     # 연동 -------------------------------------------------------------------
