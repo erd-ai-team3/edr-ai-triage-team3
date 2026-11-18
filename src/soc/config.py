@@ -51,10 +51,10 @@ class Settings(BaseSettings):
     # 에이전트 예산 ------------------------------------------------------------
     max_tool_rounds: int = 6                # 조사 단계에서 도구를 부르는 최대 횟수
     # 가드레일이 실패하면? (2일차 1-2에서 둘이 정합니다)
-    #   retry     : 부족한 점을 알려 주고 한 번 더 조사 → 그래도 실패하면 '의심'으로 낮춤
+    #   retry     : 부족한 점을 알려 주고 설정된 횟수만큼 재조사 → 그래도 실패하면 '의심'으로 낮춤
     #   downgrade : 바로 '의심'으로 낮추고 사람 검토 표시
     guardrail_on_fail: str = "retry"
-    max_guardrail_retries: int = 1
+    max_guardrail_retries: int = 2
 
     # 상태 저장(체크포인터): auto = BACKEND가 real이면 postgres, memory면 memory
     checkpointer: str = "auto"
