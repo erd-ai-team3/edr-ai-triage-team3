@@ -39,12 +39,35 @@ def _ids(obj) -> list[str]:
 
 
 # ---------------------------------------------------------------------------- 조사
+
 def investigate(state: TriageState) -> dict:
-    """조사 노드: LLM이 🔍 조사 도구 중 무엇을 부를지 정합니다."""
-    # TODO[AG-1]: telemetry_tools()를 LLM에 연결(bind_tools)하고, 시스템 프롬프트 + 대화(messages)로 호출합니다.
-    # 첫 호출이면 대화가 비어 있으니 알림 메시지(_alert_message)를 먼저 넣습니다.
-    # 돌려줄 것: 새 메시지들, trace ["조사"], usage (usage_of(응답))
-    raise NotImplementedError("TODO[AG-1]")
+    """조사 노드: LLM이 조사 도구를 선택하고 호출합니다."""
+
+    llm = get_llm().bind_tools(telemetry_tools())
+
+    messages = list(state.get("messages", []))
+    new_messages = []
+
+    # 최초 실행 시 알림을 대화에 추가
+    if not messages:
+        alert_msg = _alert_message(state["alert"])
+        messages.append(alert_msg)
+        new_messages.append(alert_msg)
+
+    system_msg = SystemMessage(
+        content=prompt("investigate")
+    )
+
+    response = llm.invoke([system_msg] + messages)
+
+    new_messages.append(response)
+
+    return {
+        "messages": new_messages,
+        "trace": ["조사"],
+        "usage": usage_of(response),
+    }
+
 
 
 def run_tools(state: TriageState) -> dict:
@@ -110,29 +133,131 @@ def after_guardrail(state: TriageState) -> str:
 
 
 # ---------------------------------------------------------------------------- 권고
+
 def recommend(state: TriageState) -> dict:
-    """권고 노드: 📘 플레이북 검색으로 근거를 찾고, LLM이 조치를 권고합니다."""
-    v, alert = state["verdict"], state["alert"]
-    # TODO[AG-2]: search_playbook_fn()으로 플레이북을 검색합니다. 질문은 알림 제목과 판정(기법)으로 만들고,
-    # 판정과 검색 결과를 LLM에 넘겨 Recommendation 형식으로 권고를 받습니다.
-    # 돌려줄 것: playbook(검색 결과), recommendation(dict), trace ["권고"], usage
-    raise NotImplementedError("TODO[AG-2]")
+    """권고 노드: 플레이북 검색 후 대응 조치를 생성합니다."""
+
+    verdict = state["verdict"]
+    alert = state["alert"]
+
+    techniques = verdict.get("techniques", [])
+
+    query = (
+        f"EDR 알림: {alert.get('title', '')}\n"
+        f"판정: {verdict.get('verdict', '')}\n"
+        f"ATT&CK 기법: {', '.join(techniques)}\n"
+        "관련 대응 절차, 승인권자, 증거 보존 방법"
+    )
+
+    # 실제 또는 Mock 플레이북 도구 호출
+    search_tool = search_playbook_fn()
+
+    if hasattr(search_tool, "invoke"):
+        playbook = search_tool.invoke({
+            "query": query,
+            "k": 3,
+        })
+    else:
+        playbook = search_tool(query=query, k=3)
+
+    context = {
+        "alert": alert,
+        "verdict": verdict,
+        "playbook": playbook,
+    }
+
+    messages = [
+        SystemMessage(content=prompt("recommend")),
+        HumanMessage(
+            content=(
+                "다음 판정과 플레이북을 근거로 대응 조치를 권고하세요.\n"
+                "```json\n"
+                + json.dumps(context, ensure_ascii=False, default=str)
+                + "\n```"
+            )
+        ),
+    ]
+
+    llm = get_llm().with_structured_output(
+        Recommendation,
+        include_raw=True,
+    )
+
+    result = llm.invoke(messages)
+
+    if result["parsed"] is None:
+        raise ValueError(
+            f"권고 구조화 출력 실패: {result.get('parsing_error')}"
+        )
+
+    return {
+        "playbook": playbook,
+        "recommendation": result["parsed"].model_dump(),
+        "trace": ["권고"],
+        "usage": usage_of(result["raw"]),
+    }
+
 
 
 # ---------------------------------------------------------------------------- 사람 승인 (2일차, 운전 🔍)
-def approval(state: TriageState) -> dict:
-    """위험한 조치가 있으면 멈추고 사람의 결정을 기다립니다. 멈춘 동안 상태는 체크포인터(Postgres)에 저장됩니다.
 
-    ⚠ 재개하면 이 노드가 '처음부터 다시' 실행됩니다 (03 문서 3장).
-    그래서 interrupt() 앞에 DB 쓰기처럼 한 번만 해야 하는 일을 두지 않습니다.
-    """
+def approval(state: TriageState) -> dict:
+    """위험 조치의 실행 여부를 사람에게 확인합니다."""
+
     actions = state["recommendation"]["actions"]
-    risky = [a for a in actions if a["action"] in DANGEROUS_ACTIONS]
-    # TODO[H-1]: 위험한 조치가 있으면 interrupt()로 멈추고, 승인권자가 판단할 내용을 넘깁니다.
-    # (01번 정책 PDF 5장: 대상 호스트, 판정과 신뢰도, ATT&CK 기법, 근거 event_id, 권고 조치)
-    # 재개되면 interrupt()가 사람의 결정({"approved": bool, "approver": str, "comment": str})을 돌려줍니다.
-    # 돌려줄 것: approval {"required", "decision", ...}, trace ["승인"]
-    return {"approval": {"required": bool(risky), "decision": "not_implemented"}, "trace": ["승인"]}
+
+    risky = [
+        action
+        for action in actions
+        if action["action"] in DANGEROUS_ACTIONS
+    ]
+
+    # 위험 조치가 없으면 승인 없이 진행
+    if not risky:
+        return {
+            "approval": {
+                "required": False,
+                "decision": "not_required",
+                "approved": None,
+            },
+            "trace": ["승인"],
+        }
+
+    alert = state["alert"]
+    verdict = state["verdict"]
+
+    # 승인권자에게 보여줄 정보
+    request = {
+        "alert_id": alert["alert_id"],
+        "host": alert["host"],
+        "verdict": verdict["verdict"],
+        "confidence": verdict["confidence"],
+        "techniques": verdict.get("techniques", []),
+        "evidence_event_ids": verdict.get(
+            "evidence_event_ids", []
+        ),
+        "actions": risky,
+    }
+
+    # 여기에서 그래프 실행 중단
+    decision = interrupt(request)
+
+    approved = decision.get("approved", False)
+
+    return {
+        "approval": {
+            "required": True,
+            "decision": (
+                "approved" if approved else "rejected"
+            ),
+            "approved": approved,
+            "approver": decision.get("approver"),
+            "comment": decision.get("comment", ""),
+            "actions": risky,
+        },
+        "trace": ["승인"],
+    }
+
 
 
 # ---------------------------------------------------------------------------- 리포트
