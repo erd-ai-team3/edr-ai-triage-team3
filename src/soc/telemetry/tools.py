@@ -10,7 +10,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from ipaddress import ip_address, ip_network
+from statistics import median
 
 from langchain_core.tools import tool
 
@@ -27,6 +30,14 @@ EVENTS = f"{settings.index_events}-*"
 CMD_MAX = 120
 MAX_ANCESTORS = 5
 TIMELINE_LIMIT = 100
+NETWORK_EVENT_LIMIT = 500
+NETWORK_DESTINATION_LIMIT = 50
+NETWORK_EVIDENCE_LIMIT = 10
+MAX_NETWORK_LOOKBACK_MINUTES = 24 * 60
+LAB_EXTERNAL_NETWORKS = (
+    ip_network("198.51.100.0/24"),  # simulated C2 range
+    ip_network("203.0.113.0/24"),   # simulated benign SaaS range
+)
 
 
 # --------------------------------------------------
@@ -396,6 +407,142 @@ def get_host_timeline(
     }
 
 
+# ==================================================
+# 주기적 외부 통신 요약
+# ==================================================
+
+def _is_external_ip(value: str) -> bool:
+    """공인 IP와 실습용 외부 예약 IP를 외부 대상으로 취급합니다."""
+    try:
+        address = ip_address(value)
+    except ValueError:
+        return False
+    return address.is_global or any(address in network for network in LAB_EXTERNAL_NETWORKS)
+
+
+def _sample_network_evidence(rows: list[dict]) -> list[dict]:
+    """토큰 사용량을 제한하면서 간격을 확인할 대표 연결 이벤트를 고릅니다."""
+    if len(rows) <= NETWORK_EVIDENCE_LIMIT:
+        selected = rows
+    else:
+        last_index = len(rows) - 1
+        indexes = sorted({round(i * last_index / (NETWORK_EVIDENCE_LIMIT - 1))
+                          for i in range(NETWORK_EVIDENCE_LIMIT)})
+        selected = [rows[index] for index in indexes]
+
+    evidence = []
+    for row in selected:
+        process = row.get("process", {})
+        network = row.get("network", {})
+        evidence.append({
+            "event_id": row["event_id"],
+            "ts": row["ts"],
+            "pid": process.get("pid"),
+            "process_name": process.get("name"),
+            "dst_port": network.get("dst_port"),
+        })
+    return evidence
+
+
+def get_network_connections(
+    host: str,
+    minutes: int = 30,
+    around_ts: str | None = None,
+) -> dict:
+    """외부 IP별 반복 연결 빈도와 연결 간격을 요약합니다.
+
+    주기적인 외부 통신(비컨/C2 가능성)이 의심될 때 사용하세요. 특히 프로세스
+    활동에서 같은 외부 IP로 여러 번 접속한 흔적을 봤다면, 이 도구로 호스트의
+    전체 통신을 IP별로 묶어 횟수와 간격을 비교할 수 있습니다. 한 번의 연결만
+    확인하거나 파일·레지스트리 행위를 볼 때는 get_process_activity()가 적합합니다.
+
+    minutes는 기준 시각 직전의 조회 구간입니다. 과거 알림을 조사할 때는
+    around_ts에 알림 시각을 전달하세요. 생략하면 현재 UTC 시각을 기준으로 합니다.
+    실제 공인 IP와 함께 시뮬레이터가 쓰는 문서용 예약 IP(198.51.100.0/24,
+    203.0.113.0/24)도 실습상 외부 IP로 포함합니다.
+
+    결과는 악성 여부를 판정하지 않습니다. 비슷한 간격의 반복은 추가 조사가
+    필요한 단서일 뿐이며, 각 목적지의 evidence에 포함된 event_id를 근거로
+    추적하세요. 이벤트가 500건 또는 목적지 IP가 50개를 넘으면 truncated가
+    true이고, 초과한 집계는 일부 결과일 수 있습니다.
+
+    Args:
+        host: 조사 대상 PC 이름 (예: WS-007)
+        minutes: 기준 시각 직전의 조회 시간(분), 1~1440 (기본 30)
+        around_ts: 조회 구간 끝 시각(ISO 8601). 과거 알림 시각을 권장합니다.
+
+    Returns:
+        호스트와 조회 구간, 외부 IP별 연결 횟수·최초/최종 시각·간격 통계,
+        대표 event_id 목록, 결과 잘림 여부.
+    """
+    if not 1 <= minutes <= MAX_NETWORK_LOOKBACK_MINUTES:
+        raise ValueError(f"minutes는 1~{MAX_NETWORK_LOOKBACK_MINUTES} 범위여야 합니다.")
+
+    end = _parse_ts(around_ts) if around_ts else datetime.now(timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = end - timedelta(minutes=minutes)
+
+    events = _search({
+        "size": NETWORK_EVENT_LIMIT + 1,
+        # 상한에 닿으면 알림 시각에 가까운 최신 이벤트를 우선 보존합니다.
+        "sort": [{"ts": "desc"}],
+        "query": {
+            "bool": {
+                "filter": [
+                    {"term": {"host": host}},
+                    {"term": {"type": "network"}},
+                    {"range": {"ts": {"gte": _iso(start), "lte": _iso(end)}}},
+                ]
+            }
+        },
+    })
+
+    events_truncated = len(events) > NETWORK_EVENT_LIMIT
+    events = events[:NETWORK_EVENT_LIMIT]
+    by_ip: dict[str, list[dict]] = defaultdict(list)
+    for event in events:
+        network = event.get("network") or {}
+        dst_ip = network.get("dst_ip")
+        if dst_ip and _is_external_ip(dst_ip):
+            by_ip[dst_ip].append(event)
+
+    ordered_ips = sorted(by_ip, key=lambda ip: (-len(by_ip[ip]), ip))
+    destinations_truncated = len(ordered_ips) > NETWORK_DESTINATION_LIMIT
+    destinations = []
+    for dst_ip in ordered_ips[:NETWORK_DESTINATION_LIMIT]:
+        rows = sorted(by_ip[dst_ip], key=lambda row: _parse_ts(row["ts"]))
+        stamps = [_parse_ts(row["ts"]) for row in rows]
+        intervals = [round((later - earlier).total_seconds(), 3)
+                     for earlier, later in zip(stamps, stamps[1:])]
+        interval_summary = None
+        if intervals:
+            interval_summary = {
+                "min": min(intervals),
+                "median": round(median(intervals), 3),
+                "max": max(intervals),
+            }
+        destinations.append({
+            "dst_ip": dst_ip,
+            "connection_count": len(rows),
+            "count_is_lower_bound": events_truncated,
+            "first_seen": rows[0]["ts"],
+            "last_seen": rows[-1]["ts"],
+            "interval_seconds": interval_summary,
+            "evidence": _sample_network_evidence(rows),
+        })
+
+    return {
+        "host": host,
+        "from": _iso(start),
+        "to": _iso(end),
+        "destinations": destinations,
+        "events_truncated": events_truncated,
+        "destinations_truncated": destinations_truncated,
+        "truncated": events_truncated or destinations_truncated,
+    }
+
+
 # --------------------------------------------------
 # LangChain 도구 등록
 # --------------------------------------------------
@@ -404,4 +551,5 @@ TELEMETRY_TOOLS = [
     tool(get_process_tree),
     tool(get_process_activity),
     tool(get_host_timeline),
+    tool(get_network_connections),
 ]

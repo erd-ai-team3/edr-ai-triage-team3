@@ -1,6 +1,6 @@
 ﻿# 아키텍처
 
-> 1일차 화이트보드 설계. 01 문서 5장의 ①~⑤ 흐름과 01b 문서의 부품 표를 실습 구조로 옮겼다. 아래는 설계도이며, 아직 구현하지 않은 동작은 표시했다.
+> 1일차 화이트보드 설계. 01 문서 5장의 ①~⑤ 흐름과 01b 문서의 부품 표를 실습 구조로 작성.
 
 ## 1. 에이전트 설계도
 
@@ -39,10 +39,40 @@ flowchart TD
     HUMAN --> API
 ```
 
+### 구현 그래프 (LangGraph 출력)
+
+아래 그림은 `python -m soc.agent.graph`의 Mermaid 출력을 붙인 것이다. 화이트보드 설계의 노드와 실제 그래프 연결을 함께 확인할 수 있다.
+
+```mermaid
+graph TD;
+    __start__([<p>__start__</p>]):::first
+    investigate(investigate)
+    tools(tools)
+    judge(judge)
+    guardrail(guardrail)
+    recommend(recommend)
+    approval(approval)
+    report(report)
+    __end__([<p>__end__</p>]):::last
+    __start__ --> investigate;
+    approval --> report;
+    guardrail -.-> investigate;
+    guardrail -.-> recommend;
+    investigate -.-> judge;
+    investigate -.-> tools;
+    judge --> guardrail;
+    recommend --> approval;
+    tools --> investigate;
+    report --> __end__;
+    classDef default fill:#f2f0ff,line-height:1.2
+    classDef first fill-opacity:0
+    classDef last fill:#bfb6fc
+```
+
 | 노드 | 하는 일 | 읽는 상태 | 쓰는 상태 | 쓰는 도구 | 운전 |
 |---|---|---|---|---|---|
 | 조사 | 알림과 앞선 도구 결과를 보고 조사 도구를 더 부를지 정한다. | `alert`, `messages`, `tool_rounds` | `messages`, `trace`, `usage` | 🔍 조사 도구 선택 | 📘 |
-| 도구 실행 | 요청된 도구를 실행해 결과를 대화에 넣고, 결과에서 조회한 `event_id`를 모은다. | `messages`, `alert` | `messages`, `seen_event_ids`, `tool_rounds`, `trace` | `get_process_tree`, `get_process_activity`, `get_host_timeline` | 📘 |
+| 도구 실행 | 요청된 도구를 실행해 결과를 대화에 넣고, 결과에서 조회한 `event_id`를 모은다. | `messages`, `alert` | `messages`, `seen_event_ids`, `tool_rounds`, `trace` | `get_process_tree`, `get_process_activity`, `get_host_timeline`, `get_network_connections` | 📘 |
 | 판정 | 실제 EDR 도구 결과와 플레이북 검색 결과의 정책 기준을 참고해 정상·의심·악성을 판정하고 신뢰도, ATT&CK 기법, 근거 ID를 만든다. | `alert`, `messages` | `verdict`, `judgment_sources`, `trace`, `usage` | 판정 LLM, 📘 `search_playbook` | 👥 |
 | 가드레일 | 판정이 인용한 근거 ID가 실제 조회 기록 또는 알림 근거에 있는지 검증한다. | `verdict`, `seen_event_ids`, `alert`, `guardrail_retries` | `guardrail`, `guardrail_log`, 필요 시 `messages`, `guardrail_retries`, `verdict`, `trace` | 근거 검증 로직 | 👥 |
 | 권고 | 판정과 알림을 바탕으로 플레이북을 찾고 대응 조치를 만든다. | `alert`, `verdict`, `messages` | `playbook`, `recommendation`, `trace`, `usage` | 📘 `search_playbook` | 🔍 |

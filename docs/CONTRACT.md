@@ -11,6 +11,7 @@
 | `get_process_tree(host, pid)` | 🔍 | | `event_id`, … | | |
 | `get_process_activity(host, pid)` | 🔍 | | `event_id`, … | | |
 | `get_host_timeline(host, around_ts, minutes)` | 🔍 | | `event_id`, … | | |
+| `get_network_connections(host, minutes=30, around_ts=None)` | 📘 | `host: str`, `minutes: int` (1~1440), `around_ts: str \| None` (기본 현재 UTC) | `from`, `to`, `destinations`(IP별 `connection_count`, `count_is_lower_bound`, `first_seen`, `last_seen`, `interval_seconds`(이벤트 2건 미만이면 null), `evidence[].event_id`), `truncated` | 최대 500개 이벤트 집계, 외부 IP 50개, IP당 근거 이벤트 10개 | 결과 없으면 `destinations: []`; 입력 오류는 `ValueError`, 검색 오류는 예외; `truncated=true`면 집계 일부일 수 있음 |
 | `search_playbook(query, k)` | 📘 | query: str, k: int = 3 | `text`, `source`(파일 이름), `page`, `category`, `score` | 최대 5개 (기본 3개) | 검색 결과 없으면 [], 실행 오류 시 예외 발생 |
 
 ## 꼭 합의할 것
@@ -21,3 +22,4 @@
 
 | 바꾼 것 | 이유 | 둘 다 동의 |
 |---|---|---|
+| `get_network_connections(host, minutes, around_ts)` 추가 | 주기적인 외부 IP 연결을 횟수·간격으로 조사하고 실제 이벤트 ID를 추적 | 문서 담당 제안 · 기록 담당 확인 |

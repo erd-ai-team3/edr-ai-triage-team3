@@ -1,4 +1,4 @@
-"""가짜 도구 4개: 도구 계약의 '모양'을 보여 주는 견본.
+"""가짜 도구 5개: 도구 계약의 '모양'을 보여 주는 견본.
 
 1일차에 계약(docs/CONTRACT.md)을 정할 때 이 파일을 함께 읽습니다.
 그 뒤에는 각자 상대의 진짜 도구가 아직 없을 때 이 가짜를 대신 씁니다. 그래서 둘이 동시에 개발할 수 있습니다.
@@ -6,10 +6,12 @@
 - 🔍 기록 담당의 진짜 도구: src/soc/telemetry/tools.py
 - 📘 문서 담당의 진짜 도구: src/soc/kb/search.py
 
-가짜는 어떤 질문을 받아도 01 문서의 예시 알림(WS-007, LSASS 덤프) 이야기를 돌려줍니다.
+가짜 조사 도구는 01 문서의 예시 알림(WS-007, LSASS 덤프)과 반복 외부 통신 예시를 돌려줍니다.
 돌려주는 모양(키 이름, event_id, source)이 진짜와 같아야 나중에 바꿔 끼울 수 있습니다.
 """
 from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
 
 from langchain_core.tools import tool
 
@@ -39,6 +41,46 @@ def get_host_timeline(host: str, around_ts: str, minutes: int = 10) -> dict:
     return {"host": host, "from": around_ts, "to": around_ts, "events": [_CMDEXE, _RUNDLL, _DMP], "truncated": False}
 
 
+def get_network_connections(
+    host: str,
+    minutes: int = 30,
+    around_ts: str | None = None,
+) -> dict:
+    """[가짜] 주기적 외부 통신이 의심될 때 IP별 횟수·간격을 확인합니다.
+
+    과거 알림 조사에는 around_ts에 알림 시각을 전달합니다. 반환된 evidence의
+    event_id를 근거로 추적하고, 반복 간격 자체를 악성 판정으로 간주하지 않습니다.
+    """
+    end = datetime.fromisoformat(around_ts.replace("Z", "+00:00")) if around_ts else datetime.now(timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = end - timedelta(minutes=minutes)
+    spacing = max(1, min(30, minutes * 60 // 3))
+    stamps = [end - timedelta(seconds=spacing * i) for i in range(3, -1, -1)]
+    evidence = [
+        {"event_id": f"evt-mock-net-{i + 1:04d}", "ts": ts.isoformat().replace("+00:00", "Z"),
+         "pid": 40702, "process_name": "rundll32.exe", "dst_port": 443}
+        for i, ts in enumerate(stamps)
+    ]
+    return {
+        "host": host,
+        "from": start.isoformat().replace("+00:00", "Z"),
+        "to": end.isoformat().replace("+00:00", "Z"),
+        "destinations": [{
+            "dst_ip": "198.51.100.23",
+            "connection_count": len(evidence),
+            "count_is_lower_bound": False,
+            "first_seen": evidence[0]["ts"],
+            "last_seen": evidence[-1]["ts"],
+            "interval_seconds": {"min": spacing, "median": spacing, "max": spacing},
+            "evidence": evidence,
+        }],
+        "events_truncated": False,
+        "destinations_truncated": False,
+        "truncated": False,
+    }
+
+
 def search_playbook(query: str, k: int = 3) -> list[dict]:
     """[가짜] 질문과 관련된 플레이북·정책 조각. 결과마다 source(파일 이름)가 있습니다."""
     rows = [
@@ -52,5 +94,6 @@ def search_playbook(query: str, k: int = 3) -> list[dict]:
     return rows[:k]
 
 
-TELEMETRY_TOOLS = [tool(get_process_tree), tool(get_process_activity), tool(get_host_timeline)]
+TELEMETRY_TOOLS = [tool(get_process_tree), tool(get_process_activity), tool(get_host_timeline),
+                   tool(get_network_connections)]
 KB_TOOLS = [tool(search_playbook)]
