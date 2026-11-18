@@ -57,6 +57,15 @@ def build_template() -> dict:
             "properties": {
                 "path": {"type": "keyword"},
                 "action": {"type": "keyword"},
+                "new_path": {"type": "keyword"},
+            },
+        },
+
+        "registry": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "keyword"},
+                "value": {"type": "keyword"},
             },
         },
 
@@ -99,7 +108,17 @@ def build_template() -> dict:
 
 def apply_template(client=None) -> None:
     client = client or get_client()
-    client.indices.put_index_template(name=TEMPLATE_NAME, body=build_template())
+    template = build_template()
+    client.indices.put_index_template(name=TEMPLATE_NAME, body=template)
+
+    # Index templates affect only indices created afterward. Add the same fields
+    # to existing daily indices so re-indexing can proceed without deleting data.
+    pattern = f"{settings.index_events}-*"
+    if client.indices.exists(index=pattern) and hasattr(client.indices, "put_mapping"):
+        client.indices.put_mapping(
+            index=pattern,
+            body={"properties": template["template"]["mappings"]["properties"]},
+        )
 
 
 def index_name(ts: str) -> str:

@@ -12,13 +12,17 @@ def telemetry_tools() -> list:
     if settings.telemetry_tools == "real":
         from ..telemetry.tools import TELEMETRY_TOOLS
         return TELEMETRY_TOOLS
-    from ..mocks import TELEMETRY_TOOLS
-    return TELEMETRY_TOOLS
+    if settings.telemetry_tools == "mock":
+        from ..mocks import TELEMETRY_TOOLS
+        return TELEMETRY_TOOLS
+    raise ValueError(f"TELEMETRY_TOOLS는 real 또는 mock이어야 합니다: {settings.telemetry_tools}")
 
 
 def search_playbook_fn():
     if settings.kb_tools == "real":
         from ..kb.search import search_playbook
         return search_playbook
-    from ..mocks import search_playbook
-    return search_playbook
+    if settings.kb_tools == "mock":
+        from ..mocks import search_playbook
+        return search_playbook
+    raise ValueError(f"KB_TOOLS는 real 또는 mock이어야 합니다: {settings.kb_tools}")

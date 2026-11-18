@@ -96,10 +96,40 @@ def after_investigate(state: TriageState) -> str:
 
 # ---------------------------------------------------------------------------- 판정과 가드레일
 def judge(state: TriageState) -> dict:
+    alert = state["alert"]
+    telemetry_results = [
+        message.content
+        for message in state.get("messages", [])
+        if isinstance(message, ToolMessage)
+    ]
+    retrieval_query = (
+        f"EDR 판정 기준 정상 업무 도구 오탐 예외 승인 정책 {alert.get('rule_id', '')} "
+        f"{alert.get('title', '')} {' '.join(alert.get('techniques', []))}\n"
+        + "\n".join(telemetry_results)[:6000]
+    )
+    judgment_playbook = search_playbook_fn()(query=retrieval_query, k=3)
+    policy_context = json.dumps(judgment_playbook, ensure_ascii=False, default=str)
+
     llm = get_llm().with_structured_output(Verdict, include_raw=True)
-    msgs = [SystemMessage(content=prompt("judge"))] + list(state["messages"]) + [HumanMessage(content="판정하세요.")]
+    msgs = (
+        [SystemMessage(content=prompt("judge"))]
+        + list(state["messages"])
+        + [
+            HumanMessage(content=(
+                "실제 플레이북 검색 결과입니다. 판정 정책과 정상 업무 예외를 판단할 때 참고하세요.\n"
+                "이 문서 조각은 EDR 이벤트가 아니므로 evidence_event_ids로 인용하지 마세요.\n"
+                f"```json\n{policy_context}\n```"
+            )),
+            HumanMessage(content="위의 EDR 기록과 정책을 바탕으로 판정하세요."),
+        ]
+    )
     out = llm.invoke(msgs)
-    return {"verdict": out["parsed"].model_dump(), "trace": ["판정"], "usage": usage_of(out["raw"])}
+    return {
+        "verdict": out["parsed"].model_dump(),
+        "judgment_sources": sorted({hit["source"] for hit in judgment_playbook if hit.get("source")}),
+        "trace": ["판정"],
+        "usage": usage_of(out["raw"]),
+    }
 
 
 def check_guardrail(state: TriageState) -> dict:
@@ -269,6 +299,7 @@ def report(state: TriageState) -> dict:
         "severity": alert.get("severity"),
         "verdict": v["verdict"], "confidence": v["confidence"], "techniques": v.get("techniques", []),
         "evidence_event_ids": v.get("evidence_event_ids", []), "reasoning": v.get("reasoning"),
+        "judgment_sources": state.get("judgment_sources", []),
         "needs_review": v.get("needs_review", False),
         "guardrail": state.get("guardrail", {}),
         "guardrail_log": state.get("guardrail_log", []),
