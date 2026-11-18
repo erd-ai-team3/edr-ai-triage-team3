@@ -8,6 +8,7 @@
 - GET  /approvals                  승인을 기다리는 알림
 - POST /approvals/{alert_id}       승인/거절 → 멈춰 있던 에이전트를 이어서 실행
 - POST /alerts/{alert_id}/triage   (워커 없이) 이 자리에서 바로 트리아지 실행 — BACKEND=memory 데모용
+- POST /alerts/{alert_id}/retry    재시도
 - GET  /healthz                    프로세스가 살아 있나 (liveness)
 - GET  /readyz                     OpenSearch·Postgres에 연결되나 (readiness)
 """
@@ -25,10 +26,11 @@ from pydantic import BaseModel
 from ..agent.checkpoint import get_checkpointer
 from ..agent.checkpoint import ping as pg_ping
 from ..agent.graph import build_graph, run_config
-from ..alerts import count_by_status, ensure_indices, get_alert, get_report, list_alerts, save_report, update_alert
+from ..alerts import count_by_status, ensure_indices, claim_triage, get_alert, get_report, list_alerts, save_report, update_alert, claim_retry
 from ..config import settings
 from ..osclient import get_client
 from .dify import router as dify_router
+
 
 log = logging.getLogger("api")
 # uvicorn은 자기 로거만 설정합니다. 우리 로그(체크포인터 종류 등)도 `kubectl logs`에 보이게 합니다 (인프라 3단계 확인)
@@ -99,16 +101,148 @@ def report(alert_id: str):
     return r
 
 
+
 @app.post("/alerts/{alert_id}/triage")
 def triage_now(alert_id: str):
+    """새 알림을 확보하고 트리아지를 실행합니다."""
     from ..worker import process
 
-    a = get_alert(alert_id)
-    if not a:
-        raise HTTPException(404, "알림이 없습니다")
-    update_alert(alert_id, status="in_progress", worker="api")
-    result = process(graph(), a)
-    return {"alert_id": alert_id, "status": result, "report": get_report(alert_id)}
+    alert = get_alert(alert_id)
+
+    if alert is None:
+        raise HTTPException(
+            status_code=404,
+            detail="알림이 없습니다",
+        )
+
+    if alert.get("status") != "new":
+        raise HTTPException(
+            status_code=409,
+            detail=f"분석 가능한 상태가 아닙니다: {alert['status']}",
+        )
+
+    # 원자적 Claim + Lease 기록
+    claimed_alert = claim_triage(
+        alert_id,
+        worker_id="api",
+    )
+
+    if claimed_alert is None:
+        raise HTTPException(
+            status_code=409,
+            detail="다른 Worker가 이미 알림을 확보했습니다.",
+        )
+
+    try:
+        result = process(
+            graph(),
+            claimed_alert,
+        )
+
+    except Exception as e:
+        log.exception("알림 분석 실패: %s", alert_id)
+
+        update_alert(
+            alert_id,
+            status="failed",
+            error=f"{type(e).__name__}: {e}"[:500],
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="알림 분석 실패. 서버 로그를 확인하세요.",
+        ) from e
+
+    return {
+        "alert_id": alert_id,
+        "status": result,
+        "report": get_report(alert_id),
+    }
+
+
+
+@app.post("/alerts/{alert_id}/retry")
+def retry_alert(alert_id: str):
+    """실패한 알림을 PostgreSQL 체크포인트에서 재개합니다."""
+    from ..worker import process
+
+    alert = get_alert(alert_id)
+
+    # 1. 알림 존재 여부 확인
+    if alert is None:
+        raise HTTPException(
+            status_code=404,
+            detail="알림이 없습니다",
+        )
+
+    # 2. failed 상태만 재시도 허용
+    if alert.get("status") != "failed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"재시도 가능한 상태가 아닙니다: {alert.get('status')}",
+        )
+
+    # 3. PostgreSQL 체크포인트 확인
+    g = graph()
+    cfg = run_config(alert_id)
+    state = g.get_state(cfg)
+
+    if not state.next:
+        raise HTTPException(
+            status_code=409,
+            detail="재개할 체크포인트가 없습니다",
+        )
+
+    # 4. 원자적 Claim: 동시 재시도 중 하나만 성공
+    claimed_alert = claim_retry(
+        alert_id,
+        worker_id="api-retry",
+    )
+
+    if claimed_alert is None:
+        raise HTTPException(
+            status_code=409,
+            detail="다른 요청이 먼저 재시도를 시작했거나 상태가 변경되었습니다.",
+        )
+
+    log.info(
+        "알림 재시도 시작: %s (체크포인트: %s)",
+        alert_id,
+        state.next,
+    )
+
+    # 5. 체크포인트에서 실행 재개
+    try:
+        result = process(g, claimed_alert)
+
+    except Exception as e:
+        log.exception("알림 재시도 실패: %s", alert_id)
+
+        error_message = f"{type(e).__name__}: {e}"[:500]
+
+        update_alert(
+            alert_id,
+            status="failed",
+            error=error_message,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="알림 재시도에 실패했습니다. 서버 로그를 확인하세요.",
+        ) from e
+
+    # 6. 성공 결과 반환
+    log.info(
+        "알림 재시도 완료: %s -> %s",
+        alert_id,
+        result,
+    )
+
+    return {
+        "alert_id": alert_id,
+        "status": result,
+        "report": get_report(alert_id),
+    }
 
 
 @app.get("/approvals")
@@ -137,3 +271,5 @@ def approve(alert_id: str, d: Decision):
     save_report(out["report"] | {"status": "completed"})
     update_alert(alert_id, status="completed")
     return out["report"]
+
+
