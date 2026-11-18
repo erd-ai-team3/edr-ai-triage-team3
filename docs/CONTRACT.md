@@ -22,4 +22,4 @@
 
 | 바꾼 것 | 이유 | 둘 다 동의 |
 |---|---|---|
-| `get_network_connections(host, minutes, around_ts)` 추가 | 주기적인 외부 IP 연결을 횟수·간격으로 조사하고 실제 이벤트 ID를 추적 | 문서 담당 제안 · 기록 담당 확인 |
+| `get_network_connections(host, minutes, around_ts)` 추가 | 주기적인 외부 IP 연결을 횟수·간격으로 조사하고 실제 이벤트 ID를 추적 | 완료 (문서 담당·기록 담당 동의) |
