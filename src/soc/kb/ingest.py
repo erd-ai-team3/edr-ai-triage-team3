@@ -17,22 +17,43 @@ from .chunk import make_chunks, to_records
 from .parse import drop_header_footer, iter_pdfs, parse_pdf
 
 
+FILE_STRATEGIES = {
+    "01_response_policy_tables.pdf": "hi_res",
+    "02_playbook_credential_dump.pdf": "fast",
+    "03_playbook_ransomware_header_footer.pdf": "fast",
+    "04_playbook_macro_powershell_code.pdf": "fast",
+    "05_newsletter_two_column.pdf": "hi_res",
+    "06_false_positive_guide_scanned.pdf": "ocr_only",
+    "07_weekly_report_chart.pdf": "hi_res",
+    "08_analyst_notes_attack_en.pdf": "fast",
+    "09_response_matrix_complex_tables.pdf": "hi_res",
+}
+
+
+def _strategy_for(pdf, strategy: str | None) -> str:
+    selected_strategy = strategy or settings.parse_strategy
+    if selected_strategy == "per-file":
+        return FILE_STRATEGIES.get(pdf.name, "fast")
+    return selected_strategy
+
+
 def build_records(strategy: str | None, max_characters: int | None) -> list[dict]:
     records: list[dict] = []
     for pdf in iter_pdfs():
         t = time.time()
-        elements = drop_header_footer(parse_pdf(pdf, strategy))
+        selected_strategy = _strategy_for(pdf, strategy)
+        elements = drop_header_footer(parse_pdf(pdf, selected_strategy))
         recs = to_records(make_chunks(elements, max_characters), pdf.name)
         records += recs
         kinds = Counter(r["category"] for r in recs)
-        print(f"{pdf.name:45s} 요소 {len(elements):4d} → 청크 {len(recs):3d} {dict(kinds)}  ({time.time() - t:.1f}초)")
+        print(f"{pdf.name:45s} 전략 {selected_strategy:7s} 요소 {len(elements):4d} → 청크 {len(recs):3d} {dict(kinds)}  ({time.time() - t:.1f}초)")
     return records
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--strategy", default=None, help=f"기본: {settings.parse_strategy}")
+    ap.add_argument("--strategy", default=None, help=f"fast / hi_res / ocr_only / per-file (기본: {settings.parse_strategy})")
     ap.add_argument("--max-characters", type=int, default=None, help=f"기본: {settings.chunk_max_characters}")
     ap.add_argument("--show", type=int, default=3, help="--dry-run에서 미리 볼 청크 수")
     a = ap.parse_args()

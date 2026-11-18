@@ -11,7 +11,7 @@ flowchart TD
     A --> I[① 조사<br/>도구 선택]
     I -->|도구 호출 요청 있고<br/>tool_rounds &lt; 6| T[도구 실행<br/>🔍 조사 도구]
     T --> I
-    I -->|도구 호출 없음 또는<br/>최대 6회 도달| J[② 판정<br/>LLM]
+    I -->|도구 호출 없음 또는<br/>최대 6회 도달| J[② 판정<br/>이벤트 + 플레이북 RAG + LLM]
     J --> G{가드레일<br/>인용 event_id가 실제 조회됐나?}
     G -->|통과| R[③ 대응 권고<br/>📘 플레이북 검색 + LLM]
     G -->|실패, 재시도 2회 미만| I
@@ -32,6 +32,7 @@ flowchart TD
       HUMAN[분석가 · SOC 팀장]
     end
     T -. 조사 조회 .-> OS
+    J -. 판정 정책 검색 .-> OS
     R -. 플레이북 검색 .-> OS
     W -. 체크포인트 저장·복원 .-> PG
     H -. 승인 요청·결정 .-> API
@@ -42,11 +43,11 @@ flowchart TD
 |---|---|---|---|---|---|
 | 조사 | 알림과 앞선 도구 결과를 보고 조사 도구를 더 부를지 정한다. | `alert`, `messages`, `tool_rounds` | `messages`, `trace`, `usage` | 🔍 조사 도구 선택 | 📘 |
 | 도구 실행 | 요청된 도구를 실행해 결과를 대화에 넣고, 결과에서 조회한 `event_id`를 모은다. | `messages`, `alert` | `messages`, `seen_event_ids`, `tool_rounds`, `trace` | `get_process_tree`, `get_process_activity`, `get_host_timeline` | 📘 |
-| 판정 | 도구 결과를 근거로 정상·의심·악성을 판정하고 신뢰도, ATT&CK 기법, 근거 ID를 만든다. | `alert`, `messages` | `verdict`, `trace`, `usage` | 판정 LLM | 👥 |
+| 판정 | 실제 EDR 도구 결과와 플레이북 검색 결과의 정책 기준을 참고해 정상·의심·악성을 판정하고 신뢰도, ATT&CK 기법, 근거 ID를 만든다. | `alert`, `messages` | `verdict`, `judgment_sources`, `trace`, `usage` | 판정 LLM, 📘 `search_playbook` | 👥 |
 | 가드레일 | 판정이 인용한 근거 ID가 실제 조회 기록 또는 알림 근거에 있는지 검증한다. | `verdict`, `seen_event_ids`, `alert`, `guardrail_retries` | `guardrail`, `guardrail_log`, 필요 시 `messages`, `guardrail_retries`, `verdict`, `trace` | 근거 검증 로직 | 👥 |
 | 권고 | 판정과 알림을 바탕으로 플레이북을 찾고 대응 조치를 만든다. | `alert`, `verdict`, `messages` | `playbook`, `recommendation`, `trace`, `usage` | 📘 `search_playbook` | 🔍 |
 | 승인 | 위험 조치가 포함됐는지 확인한다. 위험 조치는 사람의 결정을 기다리고, 위험하지 않으면 통과시킨다. | `recommendation`, `alert`, `verdict` | `approval`, `trace` | 승인 API / LangGraph interrupt | 🔍 |
-| 리포트 | 판정, 근거, 플레이북 출처, 권고, 승인 결과와 실행 경로를 모아 리포트를 만든다. | `alert`, `verdict`, `guardrail`, `guardrail_log`, `recommendation`, `playbook`, `approval`, `tool_rounds`, `usage`, `trace` | `report`, `trace` | 리포트 저장·응답 경로 | 👥 |
+| 리포트 | 판정, 근거, 판정·권고에 사용한 플레이북 출처, 승인 결과와 실행 경로를 모아 리포트를 만든다. | `alert`, `verdict`, `guardrail`, `guardrail_log`, `judgment_sources`, `recommendation`, `playbook`, `approval`, `tool_rounds`, `usage`, `trace` | `report`, `trace` | 리포트 저장·응답 경로 | 👥 |
 
 ### 상태에 담는 내용
 
@@ -58,6 +59,7 @@ LangGraph 상태는 각 노드가 공유하는 사건별 작업 기록이다. �
 | `messages` | 알림 입력, 조사 대화, 도구 호출과 반환 결과, 재조사 지시 |
 | `seen_event_ids` | 조사 도구 결과에서 실제 확인한 이벤트 ID 목록 |
 | `verdict` | 정상·의심·악성 판정, 신뢰도, ATT&CK 기법, 근거 이벤트 ID, 이유 |
+| `judgment_sources` | 판정 시 정책 기준과 정상 업무 예외를 참고한 플레이북 출처 |
 | `guardrail`, `guardrail_log`, `guardrail_retries` | 최근 검증 결과, 검증 이력, 재시도 횟수 |
 | `playbook`, `recommendation` | 검색된 문서 조각과 출처, 대응 조치 및 요약 |
 | `approval` | 승인 필요 여부, 승인·거절 결정, 승인자와 의견 |
@@ -83,7 +85,7 @@ LangGraph 상태는 각 노드가 공유하는 사건별 작업 기록이다. �
 1. **조사 후 어디로 갈까?** 조사 LLM이 도구 호출을 요청하고 누적 실행 라운드가 6회 미만이면 도구 실행 후 다시 조사한다. 한 라운드에서 도구를 여러 개 요청할 수 있다. 도구 호출을 요청하지 않거나 6라운드에 도달하면 판정으로 넘어간다. 상한은 `MAX_TOOL_ROUNDS` 설정(기본값 6)을 따른다.
 2. **가드레일이 실패하면?** 기본 설정은 `retry`다. 최대 두 차례 재조사를 요청해 근거를 보강한다. 두 번 재시도한 뒤에도 실패하면 근거로 확인되지 않은 ID를 제거하고, 악성 판정을 의심으로 낮추며 사람 검토가 필요하다고 표시한 뒤 권고 단계로 간다. 재시도 횟수는 `MAX_GUARDRAIL_RETRIES`(기본값 2), 정책은 `GUARDRAIL_ON_FAIL` 설정을 따른다.
 3. **어떤 권고에서 멈출까?** `block_ip`, `kill_process`, `isolate_host`, `reset_password`처럼 정책상 위험한 조치가 있으면 승인 노드에서 멈춰 API를 통해 사람의 결정을 기다린다. 승인이 필요 없는 권고는 승인 대기 없이 리포트로 간다. 사람의 거절도 결과에 기록한 뒤 리포트로 이어진다.
-4. **무엇을 근거로 제시할까?** 판정은 실제로 조사한 이벤트 ID만 인용한다. 가드레일이 근거를 검증하고, 리포트에는 이벤트 ID와 플레이북 출처를 남긴다.
+4. **무엇을 근거로 제시할까?** 판정은 실제로 조사한 이벤트 ID만 인용한다. 판정 노드는 플레이북을 정책 맥락으로 참고하되 플레이북 청크를 EDR 이벤트 근거로 인용하지 않는다. 가드레일이 이벤트 ID를 검증하고, 리포트에는 이벤트 ID와 판정·권고에 사용한 플레이북 출처를 남긴다.
 
 ## 3. 배포 구성도 (2일차부터)
 

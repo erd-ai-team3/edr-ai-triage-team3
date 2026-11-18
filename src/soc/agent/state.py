@@ -52,6 +52,7 @@ class TriageState(TypedDict, total=False):
     seen_event_ids: Annotated[list[str], operator.add]    # 도구로 실제 조회한 기록의 id (가드레일이 씀)
     tool_rounds: int
     verdict: dict
+    judgment_sources: list[str]
     guardrail: dict
     guardrail_log: Annotated[list[dict], operator.add]   # 가드레일 검사 기록 (평가에서 '지어낸 근거 비율'에 씀)
     guardrail_retries: int

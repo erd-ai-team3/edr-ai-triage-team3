@@ -17,6 +17,8 @@ PROMPTS = {
             "  '그 PowerShell이 외부 IP로 주기적으로 통신함'은 두 근거 (정책 3장).\n"
             "- 근거가 하나뿐이거나 정상 업무 도구로 설명할 수 있으면 의심(suspicious).\n"
             "- 사전 등록된 업무 도구(IT 자산관리 ccmexec.exe, 백업 backupagent.exe)의 활동은 명령과 경로를 확인한 뒤 정상(benign) 가능.\n"
+            "- 판정 노드가 제공한 플레이북 검색 결과는 정책 기준과 정상 업무 예외를 확인하는 데 사용하세요.\n"
+            "- 플레이북 문서의 출처나 내용은 EDR 이벤트 근거가 아닙니다.\n"
             "- evidence_event_ids에는 도구 결과에 실제로 나온 event_id만 쓰세요. 지어내면 안 됩니다."
         ),
         "recommend": (

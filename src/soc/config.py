@@ -25,9 +25,9 @@ class Settings(BaseSettings):
     # real   : OpenSearch + Postgres (인프라 0단계 이후)
     backend: str = "memory"
 
-    # 에이전트가 쓸 도구: real(직접 만든 것) / mock(mocks.py의 가짜). 2일차 1-1에서 하나씩 real로 바꿉니다.
-    telemetry_tools: str = "mock"
-    kb_tools: str = "mock"
+    # 실제 OpenSearch 기반 도구를 기본으로 사용합니다. mock은 명시적으로 선택할 때만 씁니다.
+    telemetry_tools: str = "real"
+    kb_tools: str = "real"
 
     # OpenSearch -----------------------------------------------------------
     opensearch_url: str = "http://localhost:9200"
@@ -72,8 +72,8 @@ class Settings(BaseSettings):
 
     # KB ---------------------------------------------------------------------
     kb_pdf_dir: str = str(ROOT / "data" / "kb" / "pdf")
-    parse_strategy: str = "fast"            # fast / hi_res / ocr_only
-    chunk_max_characters: int = 600
+    parse_strategy: str = "per-file"        # fast / hi_res / ocr_only / per-file
+    chunk_max_characters: int = 800
     chunk_new_after_n_chars: int = 600
 
     # 연동 -------------------------------------------------------------------
