@@ -57,6 +57,7 @@ def build_template() -> dict:
             "properties": {
                 "path": {"type": "keyword"},
                 "action": {"type": "keyword"},
+                "new_path": {"type": "keyword"},
             },
         },
 

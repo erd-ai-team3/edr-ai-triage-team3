@@ -1,0 +1,84 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: soc
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+
+      terminationGracePeriodSeconds: 120
+
+      containers:
+        - name: worker
+          image: ghcr.io/erd-ai-team3/edr-ai-triage-team3:lab-v3
+          imagePullPolicy: Always
+
+          command:
+            - python
+            - -m
+            - soc.worker
+
+          ports:
+            - name: health
+              containerPort: 9100
+
+          envFrom:
+            - configMapRef:
+                name: soc-config
+
+          env:
+            - name: BACKEND
+              value: "real"
+            - name: CHECKPOINTER
+              value: "postgres"
+            - name: TELEMETRY_TOOLS
+              value: "real"
+            - name: KB_TOOLS
+              value: "mock"
+            - name: FAKE_LLM
+              value: "true"
+            - name: HEALTH_PORT
+              value: "9100"
+            - name: HEARTBEAT_STALE_SEC
+              value: "600"
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: worker-secret
+                  key: POSTGRES_DSN
+
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+            failureThreshold: 18
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"

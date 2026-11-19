@@ -1,15 +1,47 @@
-# 📘 kb-ingest Job 전용 이미지: Unstructured가 무거워서 앱 이미지와 분리합니다 (인프라 6단계).
+
+# KB Ingest 전용 이미지
+# Unstructured / OCR / hi_res 처리
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        poppler-utils tesseract-ocr tesseract-ocr-kor libgl1 libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src \
+    KB_PDF_DIR=/app/data/kb/pdf \
+    PARSE_STRATEGY=fast
+
 WORKDIR /app
+
+# PDF / OCR / 이미지 처리 패키지
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-kor \
+    libmagic1 \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 의존성
 COPY requirements.txt requirements-kb.txt ./
-# hi_res용 torch는 CPU 전용 빌드를 먼저 설치합니다. 기본(GPU) 빌드는 이미지가 10GB를 넘습니다.
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# CPU 전용 PyTorch
+RUN pip install --no-cache-dir \
+    torch torchvision \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# KB 파싱 의존성
 RUN pip install --no-cache-dir -r requirements-kb.txt
+
+# Unstructured 텍스트 분류에 필요한 spaCy 영어 모델
+RUN python -m spacy download en_core_web_sm
+
+# 애플리케이션 코드와 KB PDF
 COPY src ./src
 COPY data/kb ./data/kb
-ENV PYTHONPATH=/app/src
+
+# 일반 사용자
+RUN useradd -m app && chown -R app:app /app
+USER app
+
+# 기본 실행 명령
 CMD ["python", "-m", "soc.kb.ingest"]

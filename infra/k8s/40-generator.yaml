@@ -1,0 +1,47 @@
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: generator
+  namespace: soc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: generator
+  template:
+    metadata:
+      labels:
+        app: generator
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: generator
+          image: ghcr.io/erd-ai-team3/edr-ai-triage-team3:lab-v3
+          imagePullPolicy: Always
+
+          command:
+            - python
+            - -m
+            - soc.simulator.run
+            - --loop
+
+          envFrom:
+            - configMapRef:
+                name: soc-config
+
+          env:
+            - name: BACKEND
+              value: "real"
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

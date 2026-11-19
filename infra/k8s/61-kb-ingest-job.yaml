@@ -1,0 +1,76 @@
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kb-ingest
+  namespace: soc
+
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 86400
+
+  template:
+    metadata:
+      labels:
+        app: kb-ingest
+
+    spec:
+      restartPolicy: Never
+
+      imagePullSecrets:
+        - name: ghcr-secret
+
+      initContainers:
+        - name: wait-opensearch
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until wget -q -O /dev/null http://opensearch:9200; do
+                echo "Waiting for OpenSearch..."
+                sleep 3
+              done
+
+          resources:
+            requests:
+              cpu: "25m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+
+      containers:
+        - name: kb-ingest
+          image: ghcr.io/erd-ai-team3/edr-ai-triage-team3:kb-v3
+          imagePullPolicy: Always
+
+          command:
+            - python
+            - -m
+            - soc.kb.ingest
+            - --strategy
+            - fast
+
+          envFrom:
+            - configMapRef:
+                name: soc-config
+
+          env:
+            - name: BACKEND
+              value: "real"
+            - name: FAKE_LLM
+              value: "true"
+            - name: KB_PDF_DIR
+              value: "/app/data/kb/pdf"
+            - name: PARSE_STRATEGY
+              value: "fast"
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "3Gi"

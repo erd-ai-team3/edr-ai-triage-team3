@@ -51,10 +51,11 @@ def _search(body: dict) -> list[dict]:
 # 이벤트 요약
 # --------------------------------------------------
 
+
 def summarize(e: dict) -> dict:
     """이벤트를 LLM이 읽기 쉬운 형태로 요약합니다."""
 
-    p = e.get("process", {})
+    p = e.get("process") or {}
 
     out = {
         "event_id": e["event_id"],
@@ -63,6 +64,7 @@ def summarize(e: dict) -> dict:
         "pid": p.get("pid"),
         "ppid": p.get("ppid"),
         "name": p.get("name"),
+        "parent_name": p.get("parent_name"),
         "cmdline": (p.get("cmdline") or "")[:CMD_MAX],
         "user": p.get("user"),
         "signed": p.get("signed"),
@@ -99,6 +101,7 @@ def summarize(e: dict) -> dict:
         out["detail"] = e["script_text"][:200]
 
     return out
+
 
 
 # --------------------------------------------------
@@ -405,3 +408,49 @@ TELEMETRY_TOOLS = [
     tool(get_process_activity),
     tool(get_host_timeline),
 ]
+
+
+
+def test_summarize_preserves_parent_name():
+    from soc.telemetry.tools import summarize
+
+    event = {
+        "event_id": "evt-test-001",
+        "ts": "2026-11-18T09:00:00Z",
+        "type": "process",
+        "process": {
+            "pid": 1234,
+            "ppid": 600,
+            "name": "powershell.exe",
+            "parent_name": "ccmexec.exe",
+            "cmdline": "powershell.exe -NoProfile",
+            "user": "SYSTEM",
+            "signed": True,
+        },
+    }
+
+    result = summarize(event)
+
+    assert result["event_id"] == "evt-test-001"
+    assert result["name"] == "powershell.exe"
+    assert result["parent_name"] == "ccmexec.exe"
+    assert result["ppid"] == 600
+
+
+def test_summarize_missing_parent_name():
+    from soc.telemetry.tools import summarize
+
+    event = {
+        "event_id": "evt-test-002",
+        "ts": "2026-11-18T09:01:00Z",
+        "type": "process",
+        "process": {
+            "pid": 5678,
+            "name": "cmd.exe",
+        },
+    }
+
+    result = summarize(event)
+
+    assert result["parent_name"] is None
+    assert result["name"] == "cmd.exe"

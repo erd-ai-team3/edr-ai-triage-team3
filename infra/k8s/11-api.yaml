@@ -1,3 +1,5 @@
+
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,26 +7,83 @@ metadata:
   namespace: soc
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
+
   selector:
     matchLabels:
       app: api
+
   template:
     metadata:
       labels:
         app: api
+
     spec:
       imagePullSecrets:
         - name: ghcr-secret
+
+      terminationGracePeriodSeconds: 30
+
       containers:
         - name: api
-          image: ghcr.io/erd-ai-team3/edr-ai-triage-team3:lab-v1
+          image: ghcr.io/erd-ai-team3/edr-ai-triage-team3:lab-v3
           imagePullPolicy: Always
+
           ports:
             - name: http
               containerPort: 8000
+
+          envFrom:
+            - configMapRef:
+                name: soc-config
+
           env:
             - name: BACKEND
-              value: "memory"
+              value: "real"
+
+            - name: CHECKPOINTER
+              value: "postgres"
+
+            - name: FAKE_LLM
+              value: "true"
+
+            - name: TELEMETRY_TOOLS
+              value: "real"
+
+            - name: KB_TOOLS
+              value: "mock"
+
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: worker-secret
+                  key: POSTGRES_DSN
+
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
           resources:
             requests:
               cpu: "100m"
@@ -32,6 +91,7 @@ spec:
             limits:
               cpu: "500m"
               memory: "512Mi"
+
 ---
 apiVersion: v1
 kind: Service

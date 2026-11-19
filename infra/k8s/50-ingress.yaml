@@ -1,0 +1,21 @@
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: soc-ingress
+  namespace: soc
+
+spec:
+  ingressClassName: traefik
+
+  rules:
+    - host: soc.1.201.110.182.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 80
